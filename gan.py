@@ -7,8 +7,7 @@ Data = collections.namedtuple('Data', ['real_x', 'real_y', 'real_x_val', 'real_y
 
 class Gan:
         
-  def __init__(self, gan_model, data,
-               input_sampler=None):
+  def __init__(self, gan_model, data, input_sampler=None):
     self._gan_model = gan_model
     self._generator = gan_model.get_layer("generator")
     self._discriminator = gan_model.get_layer("discriminator")
@@ -38,31 +37,47 @@ class Gan:
 
     for i in range(iterations):
       input_ = self._input_sampler(num_samples)
-      gen_output = self._generator.predict(input_)
-      dis_output = self._discriminator.predict(gen_output)
+      fake_x = self._generator.predict(input_)
+      fake_y = np.full(shape=(num_samples, 1), fill_value=0)
+      dis_output = self._discriminator.predict(fake_x)
             
-      dx, dy = self._make_discriminator_data(gen_output, num_samples)
-      
-      scores = self._discriminator.evaluate(x=dx, y=dy)[1]
-      score = scores.mean()
+      #print(f"---------- Round {i} predictions: {score} ----------" )
+      #if i % plot_period == 0:
+      #plot_data(discriminator, gen_output)
       #mean_disc_score = dis_output.mean()
 
+      #dx, dy = self._make_discriminator_data(fake_x, num_samples)
+      
+      #scores = self._discriminator.evaluate(x=dx, y=dy)[1]
+      #score = scores.mean()
+      disc_real_scores = self._discriminator.evaluate(x=self._data.real_x, y=self._data.real_y, verbose=verbose)[1]
+      disc_real_score = disc_real_scores.mean()
+
+      disc_fake_scores = self._discriminator.evaluate(x=fake_x, y=fake_y, verbose=verbose)[1]
+      disc_fake_score = disc_fake_scores.mean()
+      
+      gan_scores = self._gan_model.evaluate(x=input_, y=fake_y, verbose=verbose)[1]
+      gan_score = gan_scores.mean()
+
+      
       if callback is not None:
         callback(gan_model=self._gan_model, 
                  generator=self._generator, 
                  discriminator=self._discriminator, 
-                 generator_output=gen_output, 
+                 generator_output=fake_x, 
                  discriminator_output=dis_output, 
-                 score=score)
+                 scores=(disc_real_score, disc_fake_score, gan_score))
       
-      print(f"---------- Round {i} predictions: {score} ----------" )
-      #if i % plot_period == 0:
-      #plot_data(discriminator, gen_output)
+      
+      if not train_generator_only and disc_real_score <= 0.9:
+        print(f"---- ROUND {i}: discriminator >>{disc_real_score:.03f}<< (real) {disc_fake_score:.03f} (fake), generator {gan_score:.03f} ----")
+        self._discriminator.fit(self._data.real_x, self._data.real_y, epochs=epochs_per_round, verbose=verbose)
+        continue
 
-      if train_discriminator_only or (not train_generator_only and score < 0.70):
-        print(f"Mean score is {score} -- training discriminator.")
-        self._discriminator.fit(dx, dy, epochs=epochs_per_round, verbose=verbose)
-      else:
-        print(f"Mean score is {score} -- training generator.")
-        gx, gy = self._make_generator_data(input_, num_samples)      
-        self._gan_model.fit(gx, gy, epochs=epochs_per_round, verbose=verbose)
+      if not train_generator_only and disc_fake_score <= 0.9:
+        print(f"---- ROUND {i}: discriminator {disc_real_score:.03f} (real) >>{disc_fake_score:.03f}<< (fake), generator {gan_score:.03f} ----")
+        self._discriminator.fit(fake_x, fake_y, epochs=epochs_per_round, verbose=verbose)
+        continue
+
+      print(f"---- ROUND {i}: discriminator {disc_real_score:.03f} (real) {disc_fake_score:.03f} (fake), generator >>{gan_score:.03f}<< ----")
+      self._gan_model.fit(input_, fake_y, epochs=epochs_per_round, verbose=verbose)
